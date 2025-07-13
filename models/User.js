@@ -4,33 +4,29 @@ const bcrypt = require('bcryptjs');
 const userSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: [true, 'Le nom est requis'],
-    trim: true,
-    maxlength: [50, 'Le nom ne peut pas dépasser 50 caractères']
+    required: true,
+    trim: true
   },
   email: {
     type: String,
-    required: [true, 'L\'email est requis'],
+    required: true,
     unique: true,
-    lowercase: true,
     trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Veuillez entrer un email valide']
+    lowercase: true
   },
   password: {
     type: String,
-    required: [true, 'Le mot de passe est requis'],
-    minlength: [6, 'Le mot de passe doit contenir au moins 6 caractères'],
-    select: false // Don't include password in queries by default
+    required: true,
+    minlength: 6
   },
-  phone: {
+  role: {
     type: String,
-    trim: true
+    enum: ['user', 'admin'],
+    default: 'user'
   },
-  address: {
-    street: String,
-    city: String,
-    postalCode: String,
-    country: String
+  isActive: {
+    type: Boolean,
+    default: true
   },
   // Environmental impact tracking
   totalCO2Saved: {
@@ -52,108 +48,145 @@ const userSchema = new mongoose.Schema({
   },
   tier: {
     type: String,
-    enum: ['bronze', 'silver', 'gold', 'platinum'],
-    default: 'bronze'
+    enum: ['Bronze', 'Silver', 'Gold', 'Platinum'],
+    default: 'Bronze'
   },
-  // Account info
   memberSince: {
     type: Date,
     default: Date.now
   },
-  preferences: [{
-    type: String
-  }],
-  // Orders will be stored in a separate collection
-  isActive: {
-    type: Boolean,
-    default: true
+  // Profile information
+  phone: String,
+  address: {
+    street: String,
+    city: String,
+    postalCode: String,
+    country: {
+      type: String,
+      default: 'Morocco'
+    }
   },
-  lastLogin: {
-    type: Date,
-    default: Date.now
+  // Preferences
+  preferences: {
+    emailNotifications: {
+      type: Boolean,
+      default: true
+    },
+    pushNotifications: {
+      type: Boolean,
+      default: true
+    },
+    newsletter: {
+      type: Boolean,
+      default: true
+    }
   },
-  // Security fields
-  failedLoginAttempts: {
+  // Security
+  lastLogin: Date,
+  loginAttempts: {
     type: Number,
     default: 0
   },
-  lockUntil: {
-    type: Date,
-    default: null
+  lockUntil: Date,
+  passwordResetToken: String,
+  passwordResetExpires: Date,
+  emailVerificationToken: String,
+  emailVerified: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
 });
 
-// Index for better query performance
-userSchema.index({ email: 1 });
-userSchema.index({ loyaltyPoints: -1 });
-
 // Hash password before saving
 userSchema.pre('save', async function(next) {
-  // Only hash the password if it has been modified (or is new)
   if (!this.isModified('password')) return next();
-
+  
   try {
-    // Hash password with cost of 12
-    this.password = await bcrypt.hash(this.password, 12);
+    const salt = await bcrypt.genSalt(12);
+    this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
     next(error);
   }
 });
 
-// Method to check if entered password is correct
-userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
-  return await bcrypt.compare(candidatePassword, userPassword);
+// Compare password method
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Method to update environmental impact
-userSchema.methods.updateImpact = function(co2Saved, waterSaved, orangesRecycled) {
-  this.totalCO2Saved += co2Saved;
-  this.totalWaterSaved += waterSaved;
-  this.totalOrangesRecycled += orangesRecycled;
-  
-  // Update loyalty points (1 point per kg of CO2 saved)
-  this.loyaltyPoints += Math.floor(co2Saved);
-  
-  // Update tier based on loyalty points
-  if (this.loyaltyPoints >= 1000) {
-    this.tier = 'platinum';
-  } else if (this.loyaltyPoints >= 500) {
-    this.tier = 'gold';
-  } else if (this.loyaltyPoints >= 100) {
-    this.tier = 'silver';
+// Check if account is locked
+userSchema.methods.isLocked = function() {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
+};
+
+// Increment login attempts
+userSchema.methods.incLoginAttempts = function() {
+  // If we have a previous lock that has expired, restart at 1
+  if (this.lockUntil && this.lockUntil < Date.now()) {
+    return this.updateOne({
+      $unset: { lockUntil: 1 },
+      $set: { loginAttempts: 1 }
+    });
   }
   
-  return this.save();
-};
-
-// Method to update loyalty points
-userSchema.methods.updateLoyaltyPoints = function(points) {
-  this.loyaltyPoints += points;
+  const updates = { $inc: { loginAttempts: 1 } };
   
-  // Update tier based on loyalty points
-  if (this.loyaltyPoints >= 1000) {
-    this.tier = 'platinum';
-  } else if (this.loyaltyPoints >= 500) {
-    this.tier = 'gold';
-  } else if (this.loyaltyPoints >= 100) {
-    this.tier = 'silver';
+  // Lock account after 5 failed attempts
+  if (this.loginAttempts + 1 >= 5 && !this.isLocked()) {
+    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 }; // 2 hours
   }
   
-  return this.save();
+  return this.updateOne(updates);
 };
 
-// Virtual for formatted member since date
-userSchema.virtual('memberSinceFormatted').get(function() {
-  return this.memberSince.toLocaleDateString('fr-FR', {
-    year: 'numeric',
-    month: 'long'
+// Reset login attempts
+userSchema.methods.resetLoginAttempts = function() {
+  return this.updateOne({
+    $unset: { loginAttempts: 1, lockUntil: 1 }
   });
-});
+};
 
-// Ensure virtual fields are serialized
-userSchema.set('toJSON', { virtuals: true });
+// Update loyalty tier based on points
+userSchema.methods.updateTier = function() {
+  let newTier = 'Bronze';
+  
+  if (this.loyaltyPoints >= 1000) {
+    newTier = 'Platinum';
+  } else if (this.loyaltyPoints >= 500) {
+    newTier = 'Gold';
+  } else if (this.loyaltyPoints >= 100) {
+    newTier = 'Silver';
+  }
+  
+  if (this.tier !== newTier) {
+    this.tier = newTier;
+    return this.save();
+  }
+  
+  return Promise.resolve(this);
+};
+
+// Add environmental impact
+userSchema.methods.addEnvironmentalImpact = function(co2Saved, waterSaved, orangesRecycled) {
+  this.totalCO2Saved += co2Saved || 0;
+  this.totalWaterSaved += waterSaved || 0;
+  this.totalOrangesRecycled += orangesRecycled || 0;
+  return this.save();
+};
+
+// Add loyalty points
+userSchema.methods.addLoyaltyPoints = function(points) {
+  this.loyaltyPoints += points || 0;
+  this.updateTier();
+  return this.save();
+};
+
+// Check if user is admin
+userSchema.methods.isAdmin = function() {
+  return this.role === 'admin';
+};
 
 module.exports = mongoose.model('User', userSchema); 

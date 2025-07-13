@@ -2,15 +2,16 @@ const express = require('express');
 const User = require('../models/User');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const Comment = require('../models/Comment');
 const Notification = require('../models/Notification');
-const { protect } = require('../middleware/auth');
+const { protect, admin } = require('../middleware/auth');
 
 const router = express.Router();
 
 // @route   GET /api/admin/users
 // @desc    Get all users (for admin purposes)
-// @access  Private
-router.get('/users', protect, async (req, res) => {
+// @access  Private/Admin
+router.get('/users', protect, admin, async (req, res) => {
   try {
     // In a real app, you'd check if user is admin
     const users = await User.find({}).select('-password');
@@ -31,8 +32,8 @@ router.get('/users', protect, async (req, res) => {
 
 // @route   GET /api/admin/orders
 // @desc    Get all orders (for admin purposes)
-// @access  Private
-router.get('/orders', protect, async (req, res) => {
+// @access  Private/Admin
+router.get('/orders', protect, admin, async (req, res) => {
   try {
     const orders = await Order.find({})
       .populate('user', 'name email')
@@ -54,8 +55,8 @@ router.get('/orders', protect, async (req, res) => {
 
 // @route   PUT /api/admin/orders/:id/status
 // @desc    Update order status
-// @access  Private
-router.put('/orders/:id/status', protect, async (req, res) => {
+// @access  Private/Admin
+router.put('/orders/:id/status', protect, admin, async (req, res) => {
   try {
     const { status } = req.body;
     const order = await Order.findByIdAndUpdate(
@@ -104,8 +105,8 @@ router.put('/orders/:id/status', protect, async (req, res) => {
 
 // @route   GET /api/admin/products
 // @desc    Get all products (for admin purposes)
-// @access  Private
-router.get('/products', protect, async (req, res) => {
+// @access  Private/Admin
+router.get('/products', protect, admin, async (req, res) => {
   try {
     const products = await Product.find({}).sort({ createdAt: -1 });
     
@@ -125,8 +126,8 @@ router.get('/products', protect, async (req, res) => {
 
 // @route   POST /api/admin/products
 // @desc    Create new product
-// @access  Private
-router.post('/products', protect, async (req, res) => {
+// @access  Private/Admin
+router.post('/products', protect, admin, async (req, res) => {
   try {
     const product = await Product.create(req.body);
     
@@ -145,8 +146,8 @@ router.post('/products', protect, async (req, res) => {
 
 // @route   PUT /api/admin/products/:id
 // @desc    Update product
-// @access  Private
-router.put('/products/:id', protect, async (req, res) => {
+// @access  Private/Admin
+router.put('/products/:id', protect, admin, async (req, res) => {
   try {
     const product = await Product.findByIdAndUpdate(
       req.params.id,
@@ -176,8 +177,8 @@ router.put('/products/:id', protect, async (req, res) => {
 
 // @route   DELETE /api/admin/products/:id
 // @desc    Delete product
-// @access  Private
-router.delete('/products/:id', protect, async (req, res) => {
+// @access  Private/Admin
+router.delete('/products/:id', protect, admin, async (req, res) => {
   try {
     const product = await Product.findByIdAndDelete(req.params.id);
 
@@ -203,8 +204,8 @@ router.delete('/products/:id', protect, async (req, res) => {
 
 // @route   GET /api/admin/stats
 // @desc    Get comprehensive admin statistics
-// @access  Private
-router.get('/stats', protect, async (req, res) => {
+// @access  Private/Admin
+router.get('/stats', protect, admin, async (req, res) => {
   try {
     // Get today's date range
     const today = new Date();
@@ -271,8 +272,8 @@ router.get('/stats', protect, async (req, res) => {
 
 // @route   POST /api/admin/test-notifications
 // @desc    Create test notifications
-// @access  Private
-router.post('/test-notifications', protect, async (req, res) => {
+// @access  Private/Admin
+router.post('/test-notifications', protect, admin, async (req, res) => {
   try {
     const users = await User.find({ isActive: true }).limit(5);
     
@@ -301,8 +302,8 @@ router.post('/test-notifications', protect, async (req, res) => {
 
 // @route   POST /api/admin/test-payment-notification
 // @desc    Create test payment notification
-// @access  Private
-router.post('/test-payment-notification', protect, async (req, res) => {
+// @access  Private/Admin
+router.post('/test-payment-notification', protect, admin, async (req, res) => {
   try {
     const users = await User.find({ isActive: true }).limit(3);
     
@@ -325,6 +326,144 @@ router.post('/test-payment-notification', protect, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la création des notifications de paiement'
+    });
+  }
+});
+
+// ADMIN MANAGEMENT
+// @route   GET /api/admin/admins
+// @desc    Get all admin users
+// @access  Private/Admin
+router.get('/admins', protect, admin, async (req, res) => {
+  try {
+    const admins = await User.find({ role: 'admin' }).select('-password');
+    res.json({ success: true, admins });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Erreur lors de la récupération des admins' });
+  }
+});
+
+// @route   POST /api/admin/admins
+// @desc    Add a new admin
+// @access  Private/Admin
+router.post('/admins', protect, admin, async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Tous les champs sont requis' });
+    }
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Cet email existe déjà' });
+    }
+    const newAdmin = await User.create({ name, email, password, role: 'admin' });
+    res.status(201).json({ success: true, admin: { _id: newAdmin._id, name: newAdmin.name, email: newAdmin.email, role: newAdmin.role } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Erreur lors de la création de l\'admin' });
+  }
+});
+
+// @route   PUT /api/admin/admins/:id/demote
+// @desc    Demote an admin to user (cannot demote self)
+// @access  Private/Admin
+router.put('/admins/:id/demote', protect, admin, async (req, res) => {
+  try {
+    if (req.user._id.toString() === req.params.id) {
+      return res.status(400).json({ success: false, message: 'Vous ne pouvez pas vous retirer vous-même' });
+    }
+    const adminUser = await User.findById(req.params.id);
+    if (!adminUser || adminUser.role !== 'admin') {
+      return res.status(404).json({ success: false, message: 'Admin non trouvé' });
+    }
+    adminUser.role = 'user';
+    await adminUser.save();
+    res.json({ success: true, message: 'Admin rétrogradé avec succès' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Erreur lors de la rétrogradation de l\'admin' });
+  }
+});
+
+// COMMENT MANAGEMENT
+// @route   GET /api/admin/comments
+// @desc    Get all comments
+// @access  Private/Admin
+router.get('/comments', protect, admin, async (req, res) => {
+  try {
+    const comments = await Comment.find({})
+      .populate('user', 'name email')
+      .populate('product', 'name')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: comments.length,
+      comments
+    });
+  } catch (error) {
+    console.error('Get comments error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des commentaires'
+    });
+  }
+});
+
+// @route   DELETE /api/admin/comments/:id
+// @desc    Delete a comment
+// @access  Private/Admin
+router.delete('/comments/:id', protect, admin, async (req, res) => {
+  try {
+    const comment = await Comment.findByIdAndDelete(req.params.id);
+    
+    if (!comment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commentaire non trouvé'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Commentaire supprimé avec succès'
+    });
+  } catch (error) {
+    console.error('Delete comment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la suppression du commentaire'
+    });
+  }
+});
+
+// @route   PUT /api/admin/comments/:id/approve
+// @desc    Approve/unapprove a comment
+// @access  Private/Admin
+router.put('/comments/:id/approve', protect, admin, async (req, res) => {
+  try {
+    const { isApproved } = req.body;
+    const comment = await Comment.findByIdAndUpdate(
+      req.params.id,
+      { isApproved },
+      { new: true }
+    );
+
+    if (!comment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commentaire non trouvé'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Commentaire ${isApproved ? 'approuvé' : 'désapprouvé'} avec succès`,
+      comment
+    });
+  } catch (error) {
+    console.error('Update comment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la mise à jour du commentaire'
     });
   }
 });

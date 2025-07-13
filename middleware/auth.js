@@ -1,84 +1,89 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// Protect routes - require authentication
 const protect = async (req, res, next) => {
-  try {
-    let token;
+  let token;
 
-    // Check if token exists in headers
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    try {
+      // Get token from header
       token = req.headers.authorization.split(' ')[1];
-    }
 
-    if (!token) {
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // Get user from token
+      req.user = await User.findById(decoded.id).select('-password');
+
+      if (!req.user) {
+        return res.status(401).json({
+          success: false,
+          message: 'Token non valide'
+        });
+      }
+
+      // Check if user is active
+      if (!req.user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'Compte désactivé'
+        });
+      }
+
+      next();
+    } catch (error) {
+      console.error('Auth middleware error:', error);
       return res.status(401).json({
-        message: 'Vous n\'êtes pas autorisé à accéder à cette ressource'
+        success: false,
+        message: 'Token non valide'
       });
     }
+  }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    // Check if user still exists
-    const currentUser = await User.findById(decoded.id);
-    if (!currentUser) {
-      return res.status(401).json({
-        message: 'L\'utilisateur associé à ce token n\'existe plus'
-      });
-    }
-
-    // Check if user is active
-    if (!currentUser.isActive) {
-      return res.status(401).json({
-        message: 'Votre compte a été désactivé'
-      });
-    }
-
-    // Grant access to protected route
-    req.user = currentUser;
-    next();
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        message: 'Token invalide'
-      });
-    }
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        message: 'Token expiré'
-      });
-    }
-    
-    console.error('Auth middleware error:', error);
-    res.status(500).json({
-      message: 'Erreur d\'authentification'
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Token non fourni'
     });
   }
 };
 
-// Optional auth middleware (doesn't require token but adds user if available)
-const optionalAuth = async (req, res, next) => {
-  try {
-    let token;
-
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const currentUser = await User.findById(decoded.id);
-      
-      if (currentUser && currentUser.isActive) {
-        req.user = currentUser;
-      }
-    }
-
-    next();
-  } catch (error) {
-    // Continue without user if token is invalid
-    next();
+// Admin middleware - require admin role
+const admin = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Accès non autorisé'
+    });
   }
+
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Accès refusé. Rôle administrateur requis.'
+    });
+  }
+
+  next();
 };
 
-module.exports = { protect, optionalAuth }; 
+// Optional auth - don't require authentication but add user if available
+const optionalAuth = async (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = await User.findById(decoded.id).select('-password');
+    } catch (error) {
+      // Token is invalid, but we don't fail the request
+      console.error('Optional auth error:', error);
+    }
+  }
+
+  next();
+};
+
+module.exports = { protect, admin, optionalAuth }; 

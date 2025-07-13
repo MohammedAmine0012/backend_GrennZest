@@ -1,61 +1,15 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Helper function to create JWT token
-const createToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: '30d' // Token expires in 30 days
-  });
-};
-
-// Helper function to send user data without password
-const sendUserResponse = (user, res, statusCode = 200) => {
-  const token = createToken(user._id);
-  
-  // Remove password from output
-  user.password = undefined;
-  
-  res.status(statusCode).json({
-    success: true,
-    token,
-    user
-  });
-};
-
-// @route   POST /api/auth/signup
+// @route   POST /api/auth/register
 // @desc    Register a new user
 // @access  Public
-router.post('/signup', [
-  body('name')
-    .trim()
-    .isLength({ min: 2, max: 50 })
-    .withMessage('Le nom doit contenir entre 2 et 50 caractères'),
-  body('email')
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Veuillez entrer un email valide'),
-  body('password')
-    .isLength({ min: 8 })
-    .withMessage('Le mot de passe doit contenir au moins 8 caractères')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
-    .withMessage('Le mot de passe doit contenir au moins une minuscule, une majuscule, un chiffre et un caractère spécial')
-], async (req, res) => {
+router.post('/register', async (req, res) => {
   try {
-    // Check for validation errors
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Données invalides',
-        errors: errors.array()
-      });
-    }
-
     const { name, email, password } = req.body;
 
     // Check if user already exists
@@ -63,28 +17,42 @@ router.post('/signup', [
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'Un compte avec cet email existe déjà'
+        message: 'Un utilisateur avec cet email existe déjà'
       });
     }
 
-    // Create new user
+    // Create user
     const user = await User.create({
       name,
       email,
       password
     });
 
-    sendUserResponse(user, res, 201);
+    // Generate token
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Utilisateur créé avec succès',
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        loyaltyPoints: user.loyaltyPoints,
+        tier: user.tier,
+        totalCO2Saved: user.totalCO2Saved,
+        totalWaterSaved: user.totalWaterSaved,
+        totalOrangesRecycled: user.totalOrangesRecycled
+      }
+    });
   } catch (error) {
-    console.error('Signup error:', error);
-    
-    if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Un compte avec cet email existe déjà'
-      });
-    }
-    
+    console.error('Register error:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la création du compte'
@@ -95,30 +63,12 @@ router.post('/signup', [
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
-router.post('/login', [
-  body('email')
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Veuillez entrer un email valide'),
-  body('password')
-    .notEmpty()
-    .withMessage('Le mot de passe est requis')
-], async (req, res) => {
+router.post('/login', async (req, res) => {
   try {
-    // Check for validation errors
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Données invalides',
-        errors: errors.array()
-      });
-    }
-
     const { email, password } = req.body;
 
-    // Check if user exists and password is correct
-    const user = await User.findOne({ email }).select('+password');
+    // Check if user exists
+    const user = await User.findOne({ email });
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -127,46 +77,54 @@ router.post('/login', [
     }
 
     // Check if account is locked
-    if (user.lockUntil && user.lockUntil > Date.now()) {
+    if (user.isLocked()) {
       return res.status(423).json({
         success: false,
         message: 'Compte temporairement verrouillé. Réessayez plus tard.'
       });
     }
 
-    // Check if user is active
-    if (!user.isActive) {
-      return res.status(401).json({
-        success: false,
-        message: 'Votre compte a été désactivé'
-      });
-    }
-
-    // Verify password
-    if (!(await user.correctPassword(password, user.password))) {
-      // Increment failed attempts
-      user.failedLoginAttempts += 1;
-      
-      // Lock account after 5 failed attempts for 15 minutes
-      if (user.failedLoginAttempts >= 5) {
-        user.lockUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
-      }
-      
-      await user.save();
-      
+    // Check password
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      // Increment login attempts
+      await user.incLoginAttempts();
       return res.status(401).json({
         success: false,
         message: 'Email ou mot de passe incorrect'
       });
     }
 
-    // Reset failed attempts on successful login
-    user.failedLoginAttempts = 0;
-    user.lockUntil = null;
+    // Reset login attempts on successful login
+    await user.resetLoginAttempts();
+    
+    // Update last login
     user.lastLogin = new Date();
     await user.save();
 
-    sendUserResponse(user, res);
+    // Generate token
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Connexion réussie',
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        loyaltyPoints: user.loyaltyPoints,
+        tier: user.tier,
+        totalCO2Saved: user.totalCO2Saved,
+        totalWaterSaved: user.totalWaterSaved,
+        totalOrangesRecycled: user.totalOrangesRecycled
+      }
+    });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
@@ -176,17 +134,78 @@ router.post('/login', [
   }
 });
 
+// @route   POST /api/auth/create-admin
+// @desc    Create an admin user (protected route)
+// @access  Private
+router.post('/create-admin', protect, async (req, res) => {
+  try {
+    const { name, email, password, adminSecret } = req.body;
+
+    // Check admin secret (you should set this in your environment variables)
+    if (adminSecret !== process.env.ADMIN_SECRET) {
+      return res.status(403).json({
+        success: false,
+        message: 'Secret administrateur incorrect'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'Un utilisateur avec cet email existe déjà'
+      });
+    }
+
+    // Create admin user
+    const adminUser = await User.create({
+      name,
+      email,
+      password,
+      role: 'admin'
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Administrateur créé avec succès',
+      user: {
+        _id: adminUser._id,
+        name: adminUser.name,
+        email: adminUser.email,
+        role: adminUser.role
+      }
+    });
+  } catch (error) {
+    console.error('Create admin error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la création de l\'administrateur'
+    });
+  }
+});
+
 // @route   GET /api/auth/verify
-// @desc    Verify JWT token
+// @desc    Verify token and get user data
 // @access  Private
 router.get('/verify', protect, async (req, res) => {
   try {
     res.json({
       success: true,
-      user: req.user
+      user: {
+        _id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        loyaltyPoints: req.user.loyaltyPoints,
+        tier: req.user.tier,
+        totalCO2Saved: req.user.totalCO2Saved,
+        totalWaterSaved: req.user.totalWaterSaved,
+        totalOrangesRecycled: req.user.totalOrangesRecycled
+      }
     });
   } catch (error) {
-    console.error('Token verification error:', error);
+    console.error('Verify token error:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la vérification du token'
@@ -195,12 +214,12 @@ router.get('/verify', protect, async (req, res) => {
 });
 
 // @route   POST /api/auth/logout
-// @desc    Logout user (client-side token removal)
+// @desc    Logout user
 // @access  Private
 router.post('/logout', protect, async (req, res) => {
   try {
-    // In a more advanced setup, you might want to blacklist the token
-    // For now, we'll just return success (client removes token)
+    // In a real app, you might want to blacklist the token
+    // For now, we'll just return success
     res.json({
       success: true,
       message: 'Déconnexion réussie'
