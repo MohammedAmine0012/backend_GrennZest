@@ -468,4 +468,110 @@ router.put('/comments/:id/approve', protect, admin, async (req, res) => {
   }
 });
 
+// @route   GET /api/admin/analytics
+// @desc    Get detailed analytics data
+// @access  Private/Admin
+router.get('/analytics', protect, admin, async (req, res) => {
+  try {
+    // Get date ranges for analytics
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const thisWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+    // Fetch all data
+    const [users, orders, products] = await Promise.all([
+      User.find({}),
+      Order.find({}),
+      Product.find({})
+    ]);
+
+    // Calculate analytics
+    const analytics = {
+      // Stock analytics
+      stockAnalytics: {
+        totalProducts: products.length,
+        activeProducts: products.filter(p => p.isActive).length,
+        lowStockProducts: products.filter(p => p.stock <= 5).length,
+        outOfStockProducts: products.filter(p => p.stock === 0).length,
+        totalStockValue: products.reduce((sum, p) => sum + (p.price * p.stock), 0),
+        averageStock: products.reduce((sum, p) => sum + p.stock, 0) / products.length || 0
+      },
+
+      // Sales analytics
+      salesAnalytics: {
+        totalOrders: orders.length,
+        totalRevenue: orders.reduce((sum, order) => sum + order.total, 0),
+        averageOrderValue: orders.length > 0 ? orders.reduce((sum, order) => sum + order.total, 0) / orders.length : 0,
+        todayOrders: orders.filter(order => order.createdAt >= today).length,
+        todayRevenue: orders.filter(order => order.createdAt >= today).reduce((sum, order) => sum + order.total, 0),
+        thisWeekOrders: orders.filter(order => order.createdAt >= thisWeek).length,
+        thisWeekRevenue: orders.filter(order => order.createdAt >= thisWeek).reduce((sum, order) => sum + order.total, 0),
+        thisMonthOrders: orders.filter(order => order.createdAt >= thisMonth).length,
+        thisMonthRevenue: orders.filter(order => order.createdAt >= thisMonth).reduce((sum, order) => sum + order.total, 0)
+      },
+
+      // User analytics
+      userAnalytics: {
+        totalUsers: users.length,
+        activeUsers: users.filter(user => user.isActive).length,
+        newUsersThisMonth: users.filter(user => user.createdAt >= thisMonth).length,
+        newUsersLastMonth: users.filter(user => user.createdAt >= lastMonth && user.createdAt < thisMonth).length
+      },
+
+      // Product category analytics
+      categoryAnalytics: {
+        cosmetics: products.filter(p => p.category === 'cosmetics').length,
+        cleaning: products.filter(p => p.category === 'cleaning').length,
+        kitchen: products.filter(p => p.category === 'kitchen').length,
+        bathroom: products.filter(p => p.category === 'bathroom').length,
+        accessories: products.filter(p => p.category === 'accessories').length,
+        gifts: products.filter(p => p.category === 'gifts').length
+      },
+
+      // Top products by stock
+      topProductsByStock: products
+        .sort((a, b) => b.stock - a.stock)
+        .slice(0, 10)
+        .map(p => ({
+          id: p._id,
+          name: p.name,
+          stock: p.stock,
+          price: p.price,
+          image: p.image
+        })),
+
+      // Low stock alerts
+      lowStockAlerts: products
+        .filter(p => p.stock <= 5)
+        .map(p => ({
+          id: p._id,
+          name: p.name,
+          stock: p.stock,
+          price: p.price,
+          image: p.image
+        })),
+
+      // Environmental impact
+      environmentalImpact: {
+        totalCO2Saved: users.reduce((sum, user) => sum + (user.totalCO2Saved || 0), 0),
+        totalWaterSaved: users.reduce((sum, user) => sum + (user.totalWaterSaved || 0), 0),
+        totalOrangesRecycled: users.reduce((sum, user) => sum + (user.totalOrangesRecycled || 0), 0)
+      }
+    };
+
+    res.json({
+      success: true,
+      analytics
+    });
+  } catch (error) {
+    console.error('Get analytics error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des analytics'
+    });
+  }
+});
+
 module.exports = router; 
