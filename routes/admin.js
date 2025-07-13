@@ -1,5 +1,7 @@
 const express = require('express');
 const User = require('../models/User');
+const Order = require('../models/Order');
+const Product = require('../models/Product');
 const Notification = require('../models/Notification');
 const { protect } = require('../middleware/auth');
 
@@ -27,35 +29,236 @@ router.get('/users', protect, async (req, res) => {
   }
 });
 
-// @route   GET /api/admin/stats
-// @desc    Get overall statistics
+// @route   GET /api/admin/orders
+// @desc    Get all orders (for admin purposes)
 // @access  Private
-router.get('/stats', protect, async (req, res) => {
+router.get('/orders', protect, async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ isActive: true });
+    const orders = await Order.find({})
+      .populate('user', 'name email')
+      .sort({ createdAt: -1 });
     
-    const totalCO2Saved = await User.aggregate([
-      { $group: { _id: null, total: { $sum: '$totalCO2Saved' } } }
-    ]);
-    
-    const totalWaterSaved = await User.aggregate([
-      { $group: { _id: null, total: { $sum: '$totalWaterSaved' } } }
-    ]);
-    
-    const totalOrangesRecycled = await User.aggregate([
-      { $group: { _id: null, total: { $sum: '$totalOrangesRecycled' } } }
-    ]);
+    res.json({
+      success: true,
+      count: orders.length,
+      orders
+    });
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des commandes'
+    });
+  }
+});
+
+// @route   PUT /api/admin/orders/:id/status
+// @desc    Update order status
+// @access  Private
+router.put('/orders/:id/status', protect, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    ).populate('user', 'name email');
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Commande non trouvée'
+      });
+    }
+
+    // Create notification for user
+    const statusMessages = {
+      'processing': 'Votre commande est en cours de traitement',
+      'shipped': 'Votre commande a été expédiée',
+      'delivered': 'Votre commande a été livrée',
+      'cancelled': 'Votre commande a été annulée'
+    };
+
+    if (statusMessages[status]) {
+      await Notification.create({
+        user: order.user._id,
+        title: 'Mise à jour de commande',
+        message: statusMessages[status],
+        type: 'order_update',
+        data: { orderId: order._id, status }
+      });
+    }
 
     res.json({
       success: true,
-      stats: {
-        totalUsers,
-        activeUsers,
-        totalCO2Saved: totalCO2Saved[0]?.total || 0,
-        totalWaterSaved: totalWaterSaved[0]?.total || 0,
-        totalOrangesRecycled: totalOrangesRecycled[0]?.total || 0
-      }
+      order
+    });
+  } catch (error) {
+    console.error('Update order status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la mise à jour du statut'
+    });
+  }
+});
+
+// @route   GET /api/admin/products
+// @desc    Get all products (for admin purposes)
+// @access  Private
+router.get('/products', protect, async (req, res) => {
+  try {
+    const products = await Product.find({}).sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: products.length,
+      products
+    });
+  } catch (error) {
+    console.error('Get products error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des produits'
+    });
+  }
+});
+
+// @route   POST /api/admin/products
+// @desc    Create new product
+// @access  Private
+router.post('/products', protect, async (req, res) => {
+  try {
+    const product = await Product.create(req.body);
+    
+    res.status(201).json({
+      success: true,
+      product
+    });
+  } catch (error) {
+    console.error('Create product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la création du produit'
+    });
+  }
+});
+
+// @route   PUT /api/admin/products/:id
+// @desc    Update product
+// @access  Private
+router.put('/products/:id', protect, async (req, res) => {
+  try {
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Produit non trouvé'
+      });
+    }
+
+    res.json({
+      success: true,
+      product
+    });
+  } catch (error) {
+    console.error('Update product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la mise à jour du produit'
+    });
+  }
+});
+
+// @route   DELETE /api/admin/products/:id
+// @desc    Delete product
+// @access  Private
+router.delete('/products/:id', protect, async (req, res) => {
+  try {
+    const product = await Product.findByIdAndDelete(req.params.id);
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: 'Produit non trouvé'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Produit supprimé avec succès'
+    });
+  } catch (error) {
+    console.error('Delete product error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la suppression du produit'
+    });
+  }
+});
+
+// @route   GET /api/admin/stats
+// @desc    Get comprehensive admin statistics
+// @access  Private
+router.get('/stats', protect, async (req, res) => {
+  try {
+    // Get today's date range
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Fetch all data
+    const [users, orders, products] = await Promise.all([
+      User.find({}),
+      Order.find({}),
+      Product.find({})
+    ]);
+
+    // Calculate statistics
+    const totalUsers = users.length;
+    const activeUsers = users.filter(user => user.isActive).length;
+    
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
+    
+    const todayOrders = orders.filter(order => 
+      order.createdAt >= today && order.createdAt < tomorrow
+    ).length;
+    
+    const todayRevenue = orders.filter(order => 
+      order.createdAt >= today && order.createdAt < tomorrow
+    ).reduce((sum, order) => sum + order.total, 0);
+    
+    const pendingOrders = orders.filter(order => 
+      ['pending', 'processing'].includes(order.status)
+    ).length;
+
+    // Environmental impact
+    const totalCO2Saved = users.reduce((sum, user) => sum + (user.totalCO2Saved || 0), 0);
+    const totalWaterSaved = users.reduce((sum, user) => sum + (user.totalWaterSaved || 0), 0);
+    const totalOrangesRecycled = users.reduce((sum, user) => sum + (user.totalOrangesRecycled || 0), 0);
+
+    const stats = {
+      totalUsers,
+      activeUsers,
+      totalOrders,
+      totalRevenue,
+      todayOrders,
+      todayRevenue,
+      pendingOrders,
+      totalCO2Saved,
+      totalWaterSaved,
+      totalOrangesRecycled
+    };
+
+    res.json({
+      success: true,
+      stats
     });
   } catch (error) {
     console.error('Get stats error:', error);
@@ -67,50 +270,25 @@ router.get('/stats', protect, async (req, res) => {
 });
 
 // @route   POST /api/admin/test-notifications
-// @desc    Create test notifications for the current user
+// @desc    Create test notifications
 // @access  Private
 router.post('/test-notifications', protect, async (req, res) => {
   try {
-    const notifications = [
-      {
-        type: 'promotion',
-        title: 'Promotion spéciale !',
-        message: 'Profitez de -20% sur tous nos produits éco-responsables cette semaine.',
-        action: { label: 'Voir les offres', url: '/shop' }
-      },
-      {
-        type: 'news',
-        title: 'Nouveau produit disponible',
-        message: 'Découvrez notre nouveau produit zéro déchet : le kit de démarrage GreenZest.',
-        action: { label: 'Découvrir', url: '/shop' }
-      },
-      {
-        type: 'system',
-        title: 'Maintenance prévue',
-        message: 'Le site sera en maintenance le 15 décembre de 2h à 4h du matin.',
-        action: { label: 'En savoir plus', url: '/blog' }
-      },
-      {
-        type: 'order',
-        title: 'Commande expédiée !',
-        message: 'Votre commande CMD-0001 a été expédiée et arrive bientôt !',
-        action: { label: 'Suivre ma commande', url: '/account' }
-      }
-    ];
+    const users = await User.find({ isActive: true }).limit(5);
+    
+    const testNotifications = users.map(user => ({
+      user: user._id,
+      title: 'Notification de test',
+      message: 'Ceci est une notification de test pour vérifier le système.',
+      type: 'test',
+      data: { test: true }
+    }));
 
-    for (const notification of notifications) {
-      await Notification.createNotification(
-        req.user._id,
-        notification.type,
-        notification.title,
-        notification.message,
-        notification.action
-      );
-    }
+    await Notification.insertMany(testNotifications);
 
     res.json({
       success: true,
-      message: 'Notifications de test créées avec succès'
+      message: `${testNotifications.length} notifications de test créées`
     });
   } catch (error) {
     console.error('Create test notifications error:', error);
@@ -122,45 +300,31 @@ router.post('/test-notifications', protect, async (req, res) => {
 });
 
 // @route   POST /api/admin/test-payment-notification
-// @desc    Create a test payment notification
+// @desc    Create test payment notification
 // @access  Private
 router.post('/test-payment-notification', protect, async (req, res) => {
   try {
-    // Create order confirmation notification
-    await Notification.createNotification(
-      req.user._id,
-      'order',
-      'Commande confirmée',
-      'Votre commande CMD-0001 a été confirmée. Total: 150 MAD',
-      {
-        label: 'Voir la commande',
-        url: '/account'
-      },
-      { orderId: 'test-order', orderNumber: 'CMD-0001' }
-    );
+    const users = await User.find({ isActive: true }).limit(3);
+    
+    const paymentNotifications = users.map(user => ({
+      user: user._id,
+      title: 'Paiement reçu',
+      message: 'Votre paiement de 150 MAD a été reçu avec succès.',
+      type: 'payment',
+      data: { amount: 150, currency: 'MAD' }
+    }));
 
-    // Create loyalty points notification
-    await Notification.createNotification(
-      req.user._id,
-      'promotion',
-      'Points de fidélité gagnés !',
-      'Vous avez gagné 150 points GreenZest pour votre commande. Continuez vos achats éco-responsables !',
-      {
-        label: 'Voir mes points',
-        url: '/account'
-      },
-      { pointsEarned: 150, orderNumber: 'CMD-0001' }
-    );
+    await Notification.insertMany(paymentNotifications);
 
     res.json({
       success: true,
-      message: 'Notifications de paiement de test créées avec succès'
+      message: `${paymentNotifications.length} notifications de paiement créées`
     });
   } catch (error) {
-    console.error('Create test payment notification error:', error);
+    console.error('Create payment notifications error:', error);
     res.status(500).json({
       success: false,
-      message: 'Erreur lors de la création des notifications de paiement de test'
+      message: 'Erreur lors de la création des notifications de paiement'
     });
   }
 });
