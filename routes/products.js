@@ -10,7 +10,7 @@ const router = express.Router();
 router.get('/', optionalAuth, async (req, res) => {
   try {
     const products = await Product.find({ isActive: true })
-      .select('name description price category stock image averageRating reviewCount')
+      .select('name description price category stock image averageRating reviewCount ecoImpact')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -65,7 +65,7 @@ router.get('/category/:category', optionalAuth, async (req, res) => {
       category: req.params.category,
       isActive: true 
     })
-      .select('name description price category stock image averageRating reviewCount')
+      .select('name description price category stock image averageRating reviewCount ecoImpact')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -91,7 +91,7 @@ router.get('/search/:query', optionalAuth, async (req, res) => {
       $text: { $search: req.params.query },
       isActive: true
     })
-      .select('name description price category stock image averageRating reviewCount')
+      .select('name description price category stock image averageRating reviewCount ecoImpact')
       .sort({ score: { $meta: 'textScore' } });
     
     res.json({
