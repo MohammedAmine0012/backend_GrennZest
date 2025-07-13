@@ -574,4 +574,46 @@ router.get('/analytics', protect, admin, async (req, res) => {
   }
 });
 
+// TEMP: Add initial three products (for setup only)
+router.post('/add-initial-products', protect, admin, async (req, res) => {
+  try {
+    const initialProducts = [
+      {
+        name: "Pâte Nettoyante GreenZest",
+        description: "Pâte nettoyante 100% naturelle à base d'écorces d'oranges amères. Efficace sur toutes les surfaces.",
+        price: 45,
+        category: "cleaning",
+        stock: 150,
+        image: "/img1.jpg",
+        isActive: true,
+        impact: "Chaque pot recycle 20 écorces et économise 10 000L d'eau"
+      },
+      {
+        name: "Confiture d'Orange Amère",
+        description: "Confiture artisanale préparée avec des écorces d'oranges amères récupérées. Goût authentique et naturel.",
+        price: 15,
+        category: "gifts",
+        stock: 80,
+        image: "/img2.jpg",
+        isActive: true,
+        impact: "Transforme les déchets d'agrumes en délicieux produit artisanal"
+      },
+      {
+        name: "Sirop d'Orange Amère",
+        description: "Sirop concentré d'orange amère, parfait pour vos boissons et desserts. 100% naturel et sans additifs.",
+        price: 35,
+        category: "gifts",
+        stock: 100,
+        image: "/img3.jpg",
+        isActive: true,
+        impact: "Valorise les écorces d'agrumes en produit gourmand"
+      }
+    ];
+    const created = await Promise.all(initialProducts.map(p => Product.create(p)));
+    res.json({ success: true, products: created });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router; 
